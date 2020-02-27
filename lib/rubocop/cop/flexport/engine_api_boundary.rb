@@ -104,6 +104,12 @@ module RuboCop
       #
       # (Note: "EngineSpecificOverrides" parameter still has effect.)
       #
+      # # "StructApiProtectedEngine" parameter
+      #
+      # The "StructApiProtectedEngine" parameter is similar to StronglyProtectedEngines
+      # but allows cross-engine method calls as long as they are StructApi calls.
+      # StructApi calls only allow primitive data types to be passed and returned.
+      #
       # # "EngineSpecificOverrides" parameter
       #
       # This parameter allows defining bi-lateral private "APIs" between
@@ -154,6 +160,15 @@ module RuboCop
               'because it\'s in the %<current_engine>s engine, which ' \
               'is in the StronglyProtectedEngines list.'
 
+        STRUCT_API_MSG = 'All non StructApi direct access of ' \
+              '%<accessed_engine>s engine disallowed because ' \
+              'it is in StructApiProtectedEngines list.'
+
+        STRUCT_API_CURRENT_MSG = 'Direct ' \
+              'non StructApi access of %<accessed_engine>s is disallowed in this file ' \
+              'because it\'s in the %<current_engine>s engine, which ' \
+              'is in the StructApiProtectedEngines list.'
+
         MAIN_APP_NAME = 'MainApp::EngineApi'
 
         def_node_matcher :rails_association_hash_args, <<-PATTERN
@@ -198,16 +213,29 @@ module RuboCop
 
         def message(accessed_engine)
           if strongly_protected_engine?(accessed_engine)
-            format(STRONGLY_PROTECTED_MSG, accessed_engine: accessed_engine)
-          elsif strongly_protected_engine?(current_engine)
-            format(
+            return format(STRONGLY_PROTECTED_MSG, accessed_engine: accessed_engine)
+          end
+          if strongly_protected_engine?(current_engine)
+            return format(
               STRONGLY_PROTECTED_CURRENT_MSG,
               accessed_engine: accessed_engine,
-              current_engine: current_engine
+              current_engine: current_engine,
             )
-          else
-            format(MSG, accessed_engine: accessed_engine)
           end
+          if struct_api_protected_engine?(accessed_engine)
+            return format(
+              STRUCT_API_MSG,
+              accessed_engine: accessed_engine,
+            )
+          end
+          if struct_api_protected_engine?(current_engine)
+            return format(
+              STRUCT_API_CURRENT_MSG,
+              accessed_engine: accessed_engine,
+              current_engine: current_engine,
+            )
+          end
+          format(MSG, accessed_engine: accessed_engine)
         end
 
         def extract_accessed_engine(node)
@@ -218,7 +246,7 @@ module RuboCop
         end
 
         def disallowed_main_app_access?(node)
-          strongly_protected_engine?(current_engine) && main_app_access?(node)
+          (strongly_protected_engine?(current_engine) || struct_api_protected_engine?(current_engine)) && main_app_access?(node)
         end
 
         def main_app_access?(node)
@@ -260,6 +288,10 @@ module RuboCop
 
           return false if strongly_protected_engine?(current_engine)
           return false if strongly_protected_engine?(accessed_engine)
+
+          if struct_api_protected_engine?(current_engine) || struct_api_protected_engine?(accessed_engine)
+            return through_struct_api?(node)
+          end
 
           valid_engine_api_access?(node, accessed_engine)
         end
@@ -326,6 +358,11 @@ module RuboCop
           node.parent&.const_type? && node.parent.children.last == :Api
         end
 
+        def through_struct_api?(node)
+          return false if !through_api?(node)
+          node.parent.parent&.const_type? && node.parent.parent.children.last == :StructApi
+        end
+
         def whitelisted?(node, engine)
           whitelist = read_api_file(engine, :whitelist)
           return false if whitelist.empty?
@@ -380,6 +417,17 @@ module RuboCop
 
         def strongly_protected_engine?(engine)
           strongly_protected_engines.include?(engine)
+        end
+
+        def struct_api_protected_engines
+          @struct_api_protected_engines ||= begin
+            struct_api_protected = cop_config['StructApiProtectedEngines'] || []
+            camelize_all(struct_api_protected)
+          end
+        end
+
+        def struct_api_protected_engine?(engine)
+          struct_api_protected_engines.include?(engine)
         end
       end
     end
